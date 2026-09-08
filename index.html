@@ -18,129 +18,190 @@
     })();
   </script>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/docsify@4/lib/themes/vue.css">
-  <style>
-    :root { --theme-color: #6A5ACD; --code-bg: #f6f7fc; }
-    .markdown-section h1, .markdown-section h2, .markdown-section h3 { font-weight: 650; }
-    .markdown-section pre { border: 1px solid #e8eaf2; border-radius: 10px; box-shadow: 0 6px 20px rgba(106, 90, 205, .07); }
-    .markdown-section code { border-radius: 4px; }
-    .markdown-section table { display: table; width: 100%; }
-    .sidebar-nav > ul > li > p { color: #6A5ACD; font-weight: 700; }
-    #theme-toggle {
-      position: fixed;
-      right: 24px;
-      bottom: 24px;
-      z-index: 20;
-      display: inline-flex;
-      align-items: center;
-      gap: 7px;
-      min-height: 42px;
-      padding: 0 14px;
-      border: 1px solid rgba(106, 90, 205, .25);
-      border-radius: 999px;
-      background: rgba(255, 255, 255, .94);
-      color: #4d438f;
-      box-shadow: 0 5px 18px rgba(40, 35, 80, .16);
-      cursor: pointer;
-      font: inherit;
-      font-size: 14px;
-      transition: background-color .2s ease, color .2s ease, border-color .2s ease, transform .2s ease;
-      backdrop-filter: blur(8px);
-    }
-    #theme-toggle:hover { transform: translateY(-2px); }
-    #theme-toggle:focus-visible { outline: 3px solid rgba(106, 90, 205, .4); outline-offset: 3px; }
-    html[data-theme="dark"] {
-      color-scheme: dark;
-    }
-    html[data-theme="dark"] body { background: #12131a; color: #c8cbd8; }
-    html[data-theme="dark"] .markdown-section { color: #c8cbd8; }
-    html[data-theme="dark"] .markdown-section strong,
-    html[data-theme="dark"] .markdown-section h1,
-    html[data-theme="dark"] .markdown-section h2,
-    html[data-theme="dark"] .markdown-section h3 { color: #e6e8f2; }
-    html[data-theme="dark"] .markdown-section pre,
-    html[data-theme="dark"] .markdown-section code { background: #1c1f2e; border-color: #2a2f4a; }
-    html[data-theme="dark"] .markdown-section a { color: #9b8cff; }
-    html[data-theme="dark"] .sidebar { background: #171a27; }
-    html[data-theme="dark"] .sidebar-nav { color: #c8cbd8; }
-    html[data-theme="dark"] #theme-toggle {
-      border-color: rgba(155, 140, 255, .35);
-      background: rgba(28, 31, 46, .94);
-      color: #d8d2ff;
-      box-shadow: 0 5px 18px rgba(0, 0, 0, .35);
-    }
-    @media (max-width: 600px) {
-      #theme-toggle { right: 16px; bottom: 16px; }
-      #theme-toggle .theme-label { display: none; }
-      #theme-toggle { width: 42px; justify-content: center; padding: 0; }
-    }
-    /* Keep the page readable when a theme is selected before Docsify renders. */
-    @media (prefers-reduced-motion: reduce) {
-      #theme-toggle { transition: none; }
-    }
-    /* Legacy system fallback for users without JavaScript. */
-    @media (prefers-color-scheme: dark) {
-      html:not([data-theme]) body { background: #12131a; color: #c8cbd8; }
-      html:not([data-theme]) .markdown-section { color: #c8cbd8; }
-      html:not([data-theme]) .sidebar { background: #171a27; }
-    }
-  </style>
+  <link rel="stylesheet" href="assets/site.css">
 </head>
 <body>
   <div id="app">正在加载题解……</div>
-  <button id="theme-toggle" type="button" aria-label="切换到暗色模式" title="切换到暗色模式">
-    <span class="theme-icon" aria-hidden="true">🌙</span>
-    <span class="theme-label">暗色模式</span>
+  <button id="theme-toggle" class="theme-toggle" type="button" aria-label="切换暗黑模式" title="切换暗黑模式">
+    <span class="theme-toggle__icon" aria-hidden="true">☾</span>
+  <span class="theme-toggle__text">暗黑模式</span>
   </button>
   <script>
-    (function () {
-      var button = document.getElementById('theme-toggle');
-      var root = document.documentElement;
+    // Mermaid 采用单队列、限规模渲染，避免切换题目时并发创建过多 SVG。
+    var MERMAID_MAX_DIAGRAMS_PER_PAGE = 4;
+    var MERMAID_MAX_SOURCE_CHARS = 6000;
+    var MERMAID_MAX_SOURCE_LINES = 120;
+    var MERMAID_MAX_NODES = 80;
+    var MERMAID_MAX_EDGES = 120;
+    var MERMAID_MAX_SVG_CHARS = 200000;
+    var mermaidPending = [];
+    var mermaidRendering = false;
+    window.__mermaidRouteVersion = 0;
+    window.__mermaidPageDiagramCount = 0;
 
-      function updateButton() {
-        var isDark = root.dataset.theme === 'dark';
-        button.querySelector('.theme-icon').textContent = isDark ? '☀️' : '🌙';
-        button.querySelector('.theme-label').textContent = isDark ? '浅色模式' : '暗色模式';
-        button.setAttribute('aria-label', isDark ? '切换到浅色模式' : '切换到暗色模式');
-        button.setAttribute('title', isDark ? '切换到浅色模式' : '切换到暗色模式');
-        document.querySelector('meta[name="theme-color"]').setAttribute('content', isDark ? '#12131a' : '#6A5ACD');
+    function mermaidLimitError(message) {
+      return '<div class="mermaid-render-error">流程图未渲染：' + message + '</div>';
+    }
+
+    function mermaidComplexity(code) {
+      var nodeMatches = code.match(/(?:^|\s)([A-Za-z][A-Za-z0-9_]*)\s*(?=\[|\(|\{)/gm) || [];
+      var edgeMatches = code.match(/-->|---|==>|-.->|~~~|--x|--o/g) || [];
+      return {
+        chars: code.length,
+        lines: code.split(/\r?\n/).length,
+        nodes: nodeMatches.length,
+        edges: edgeMatches.length
+      };
+    }
+
+    function drainMermaidQueue() {
+      if (mermaidRendering || !mermaidPending.length) return;
+      var task = mermaidPending.shift();
+      if (task.routeVersion !== window.__mermaidRouteVersion) {
+        drainMermaidQueue();
+        return;
       }
-
-      updateButton();
-      button.addEventListener('click', function () {
-        var nextTheme = root.dataset.theme === 'dark' ? 'light' : 'dark';
-        root.dataset.theme = nextTheme;
-        try {
-          localStorage.setItem('gplt-theme', nextTheme);
-        } catch (error) {
-          // The toggle still works when browser storage is unavailable.
-        }
-        updateButton();
+      mermaidRendering = true;
+      Promise.resolve().then(task.render).then(task.success).catch(task.failure).then(function () {
+        mermaidRendering = false;
+        drainMermaidQueue();
       });
-    })();
+    }
+
+    function enqueueMermaidRender(task) {
+      mermaidPending.push(task);
+      drainMermaidQueue();
+    }
 
     window.$docsify = {
       name: 'GPLT · Ruby 题解',
       repo: 'https://github.com/Zonkidd-Shao/gplt_article_by_ruby',
       loadSidebar: true,
-      // Include every heading used by the solution pages (h2 and h3).
-      subMaxLevel: 3,
+      mergeNavbar: true,
+      subMaxLevel: 0,
+      sidebarDisplayLevel: 2,
       auto2top: true,
-      relativePath: true,
+      relativePath: false,
       homepage: 'README.md',
       alias: { '/.*/_sidebar.md': '/_sidebar.md' },
       search: {
-        placeholder: '🔍 搜索题号 / 关键词',
+        placeholder: '搜索题号或关键词',
         depth: 4,
-        noData: '没有找到结果',
-        paths: 'auto'
+        noData: '没有找到匹配内容',
+        paths: 'auto',
+        hideOtherSidebarContent: false
       },
       pagination: {
         previousText: '上一题',
         nextText: '下一题',
-        crossChapter: true
+        crossChapter: true,
+        crossChapterText: true
       },
-      copyCode: { buttonText: '复制', errorText: '复制失败', successText: '已复制' }
+      copyCode: { buttonText: '复制代码', errorText: '复制失败', successText: '已复制' },
+      themeColor: '#6d5dfc',
+      markdown: {
+        renderer: {
+          code: function (code, lang) {
+            if (lang !== 'mermaid') return this.origin.code.apply(this, arguments);
+            var complexity = mermaidComplexity(code);
+            if (complexity.chars > MERMAID_MAX_SOURCE_CHARS ||
+                complexity.lines > MERMAID_MAX_SOURCE_LINES ||
+                complexity.nodes > MERMAID_MAX_NODES ||
+                complexity.edges > MERMAID_MAX_EDGES) {
+              return mermaidLimitError('图规模超过安全上限（节点 ' + complexity.nodes +
+                '，连线 ' + complexity.edges + '，源码 ' + complexity.chars + ' 字符）');
+            }
+            if (window.__mermaidPageDiagramCount >= MERMAID_MAX_DIAGRAMS_PER_PAGE) {
+              return mermaidLimitError('单页流程图数量超过安全上限');
+            }
+            window.__mermaidPageDiagramCount += 1;
+            var id = 'mermaid-' + (++window.__mermaidCounter);
+            var containerId = id + '-container';
+            var routeVersion = window.__mermaidRouteVersion;
+            enqueueMermaidRender({
+              routeVersion: routeVersion,
+              render: function () {
+                if (routeVersion !== window.__mermaidRouteVersion) return null;
+                return Promise.resolve(window.mermaid.render(id, code));
+              },
+              success: function (result) {
+                if (!result || routeVersion !== window.__mermaidRouteVersion) return;
+                if (result.svg.length > MERMAID_MAX_SVG_CHARS) throw new Error('生成的 SVG 过大');
+                var container = document.getElementById(containerId);
+                if (container) container.innerHTML = result.svg;
+              },
+              failure: function (error) {
+                var container = document.getElementById(containerId);
+                if (container && routeVersion === window.__mermaidRouteVersion) {
+                  container.className = 'mermaid-render-error';
+                  container.textContent = '流程图渲染失败：' + (error && error.message ? error.message : 'Mermaid 语法错误');
+                }
+                console.error('Mermaid render failed', error);
+              }
+            });
+            return '<div class="mermaid" id="' + containerId + '"></div>';
+          }
+        }
+      },
+      plugins: [function (hook, vm) {
+        hook.beforeEach(function (markdown) {
+          window.__mermaidRouteVersion += 1;
+          window.__mermaidPageDiagramCount = 0;
+          mermaidPending.length = 0;
+          return markdown;
+        });
+
+        hook.doneEach(function () {
+          document.querySelectorAll('.sidebar-nav .page-toc').forEach(function (toc) {
+            toc.remove();
+          });
+
+          var activeLink = document.querySelector('.sidebar-nav li.active > a, .sidebar-nav li.active > p > a');
+          if (activeLink) {
+            var activeItem = activeLink.closest('li');
+            var headings = Array.prototype.slice.call(document.querySelectorAll(
+              '#main h1, #main h2, #main h3, #main h4, #main h5, #main h6'
+            ));
+            if (headings.length) {
+              var toc = document.createElement('ul');
+              toc.className = 'app-sub-sidebar page-toc';
+              headings.forEach(function (heading) {
+                var item = document.createElement('li');
+                var link = document.createElement('a');
+                link.className = 'section-link';
+                item.dataset.level = heading.tagName.substring(1);
+                link.textContent = heading.textContent;
+                link.href = vm.router.toURL(vm.router.getCurrentPath(), { id: heading.id });
+                item.appendChild(link);
+                toc.appendChild(item);
+              });
+              activeItem.appendChild(toc);
+            }
+          }
+
+          if (!window.MathJax || !window.MathJax.typesetPromise) return;
+          var main = document.querySelector('#main');
+          window.MathJax.typesetPromise(main ? [main] : undefined);
+        });
+      }]
     };
+  </script>
+  <script>
+    window.__mermaidCounter = 0;
+    window.MathJax = {
+      tex: {
+        inlineMath: [['$', '$'], ['\\(', '\\)']],
+        displayMath: [['$$', '$$'], ['\\[', '\\]']]
+      },
+      options: {
+        skipHtmlTags: ['script', 'noscript', 'style', 'textarea', 'pre', 'code']
+      }
+    };
+  </script>
+  <script async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@10.9.1/dist/mermaid.min.js"></script>
+  <script>
+    mermaid.initialize({ startOnLoad: false, theme: document.documentElement.dataset.theme === 'dark' ? 'dark' : 'default' });
   </script>
   <script src="https://cdn.jsdelivr.net/npm/docsify@4"></script>
   <script src="https://cdn.jsdelivr.net/npm/docsify@4/lib/plugins/search.min.js"></script>
@@ -148,7 +209,8 @@
   <script src="https://cdn.jsdelivr.net/npm/docsify-pagination@2/dist/docsify-pagination.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/docsify@4/lib/plugins/zoom-image.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/prismjs@1/components/prism-ruby.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/docsify-mermaid@2/dist/docsify-mermaid.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/docsify-count/dist/countable.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/docsify-sidebar-collapse/dist/docsify-sidebar-collapse.min.js"></script>
+  <script src="assets/site.js"></script>
 </body>
 </html>
